@@ -12,7 +12,7 @@ databaseChangeLog:
                   name VARCHAR2(120) NOT NULL,
                   email VARCHAR2(160) NOT NULL UNIQUE,
                   password_hash VARCHAR2(255) NOT NULL,
-                  created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL
+                  created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
               );
 
               CREATE TABLE projects (
@@ -20,7 +20,7 @@ databaseChangeLog:
                   name VARCHAR2(160) NOT NULL,
                   description VARCHAR2(2000),
                   owner_id NUMBER NOT NULL,
-                  created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+                  created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
                   CONSTRAINT fk_projects_owner FOREIGN KEY (owner_id) REFERENCES users(id)
               );
 
@@ -32,7 +32,7 @@ databaseChangeLog:
                   project_id NUMBER NOT NULL,
                   assignee_id NUMBER,
                   due_date DATE,
-                  created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
+                  created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
                   CONSTRAINT fk_tasks_project FOREIGN KEY (project_id) REFERENCES projects(id),
                   CONSTRAINT fk_tasks_assignee FOREIGN KEY (assignee_id) REFERENCES users(id)
               );

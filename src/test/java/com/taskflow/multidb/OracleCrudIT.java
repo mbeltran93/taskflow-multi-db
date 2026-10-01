@@ -9,12 +9,15 @@ import org.testcontainers.oracle.OracleContainer;
 
 /**
  * Misma suite de tests que Postgres/MySQL, pero contra Oracle Free real via Testcontainers.
- * Deshabilitado por defecto: la imagen gvenzl/oracle-free pesa varios GB y el primer arranque
- * (creacion de datafiles) puede tardar 3-5 minutos, demasiado para un feedback loop normal.
- * Para habilitarla: borrar el @Disabled y correr `mvn test -Dtest=OracleCrudIT`.
+ * Deshabilitado por defecto por el mismo motivo que SqlServerCrudIT (ver ese comentario):
+ * en esta maquina Testcontainers no logra hablar con el daemon de Docker Desktop para
+ * Windows (docker-java recibe una respuesta "stub" del named pipe), no por el peso de la
+ * imagen. El CRUD completo contra Oracle real SI esta verificado, por fuera de
+ * Testcontainers (docker compose + curl, ver README). Para habilitarla: borrar el
+ * @Disabled y correr `mvn verify -Dit.test=OracleCrudIT` en una maquina sin este problema.
  */
 @Testcontainers
-@Disabled("Requiere descargar gvenzl/oracle-free (varios GB, arranque lento). Ver comentario de la clase para habilitarla.")
+@Disabled("Testcontainers no puede hablar con el daemon de Docker Desktop en esta maquina (ver comentario de la clase). El CRUD contra Oracle real SI esta verificado por fuera de Testcontainers, ver README.")
 class OracleCrudIT extends AbstractCrudIT {
 
     @Container
