@@ -1,0 +1,45 @@
+databaseChangeLog:
+  - changeSet:
+      id: 1-create-schema
+      author: mbeltran93
+      changes:
+        - sql:
+            splitStatements: true
+            endDelimiter: ";"
+            sql: |
+              CREATE TABLE users (
+                  id BIGINT IDENTITY(1,1) PRIMARY KEY,
+                  name NVARCHAR(120) NOT NULL,
+                  email NVARCHAR(160) NOT NULL UNIQUE,
+                  password_hash NVARCHAR(255) NOT NULL,
+                  created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+              );
+
+              CREATE TABLE projects (
+                  id BIGINT IDENTITY(1,1) PRIMARY KEY,
+                  name NVARCHAR(160) NOT NULL,
+                  description NVARCHAR(2000),
+                  owner_id BIGINT NOT NULL,
+                  created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+                  CONSTRAINT fk_projects_owner FOREIGN KEY (owner_id) REFERENCES users(id)
+              );
+
+              CREATE TABLE tasks (
+                  id BIGINT IDENTITY(1,1) PRIMARY KEY,
+                  title NVARCHAR(200) NOT NULL,
+                  description NVARCHAR(2000),
+                  status NVARCHAR(20) NOT NULL DEFAULT 'TODO',
+                  project_id BIGINT NOT NULL,
+                  assignee_id BIGINT NULL,
+                  due_date DATE NULL,
+                  created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+                  CONSTRAINT fk_tasks_project FOREIGN KEY (project_id) REFERENCES projects(id),
+                  CONSTRAINT fk_tasks_assignee FOREIGN KEY (assignee_id) REFERENCES users(id)
+              );
+
+              CREATE INDEX idx_projects_owner_id ON projects(owner_id);
+              CREATE INDEX idx_tasks_project_id ON tasks(project_id);
+              CREATE INDEX idx_tasks_assignee_id ON tasks(assignee_id);
+      rollback:
+        - sql:
+            sql: DROP TABLE tasks; DROP TABLE projects; DROP TABLE users;

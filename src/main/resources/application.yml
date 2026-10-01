@@ -1,0 +1,25 @@
+spring:
+  application:
+    name: taskflow-multi-db
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+  jpa:
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
+  liquibase:
+    enabled: true
+
+server:
+  port: 8080
+
+logging:
+  level:
+    liquibase: INFO
+    org.hibernate.SQL: WARN
+
+# No hay perfil por defecto a proposito: hay que elegir explicitamente
+# con -Dspring-boot.run.profiles=postgres|mysql|sqlserver|oracle (ver README).
