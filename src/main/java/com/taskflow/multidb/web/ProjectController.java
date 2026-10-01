@@ -1,8 +1,10 @@
 package com.taskflow.multidb.web;
 
+import com.taskflow.multidb.entity.TaskStatus;
 import com.taskflow.multidb.service.ProjectService;
 import com.taskflow.multidb.service.TaskService;
 import com.taskflow.multidb.web.dto.ProjectDtos.CreateProjectRequest;
+import com.taskflow.multidb.web.dto.ProjectDtos.ProjectCloseResult;
 import com.taskflow.multidb.web.dto.ProjectDtos.ProjectResponse;
 import com.taskflow.multidb.web.dto.ProjectDtos.UpdateProjectRequest;
 import com.taskflow.multidb.web.dto.TaskDtos.TaskResponse;
@@ -40,8 +42,13 @@ public class ProjectController {
     }
 
     @GetMapping("/{id}/tasks")
-    public List<TaskResponse> findTasks(@PathVariable Long id) {
-        return taskService.findByProjectId(id);
+    public List<TaskResponse> findTasks(@PathVariable Long id, @RequestParam(required = false) TaskStatus status) {
+        return status == null ? taskService.findByProjectId(id) : taskService.findByProjectIdAndStatus(id, status);
+    }
+
+    @PostMapping("/{id}/close")
+    public ProjectCloseResult close(@PathVariable Long id) {
+        return projectService.close(id);
     }
 
     @PutMapping("/{id}")

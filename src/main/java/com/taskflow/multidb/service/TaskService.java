@@ -1,6 +1,7 @@
 package com.taskflow.multidb.service;
 
 import com.taskflow.multidb.entity.Task;
+import com.taskflow.multidb.entity.TaskStatus;
 import com.taskflow.multidb.repository.ProjectRepository;
 import com.taskflow.multidb.repository.TaskRepository;
 import com.taskflow.multidb.repository.UserRepository;
@@ -48,6 +49,11 @@ public class TaskService {
     @Transactional(readOnly = true)
     public List<TaskResponse> findByProjectId(Long projectId) {
         return taskRepository.findByProjectId(projectId).stream().map(this::toResponse).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<TaskResponse> findByProjectIdAndStatus(Long projectId, TaskStatus status) {
+        return taskRepository.findByProjectIdAndStatus(projectId, status).stream().map(this::toResponse).toList();
     }
 
     @Transactional(readOnly = true)

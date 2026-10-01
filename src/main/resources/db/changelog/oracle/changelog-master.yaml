@@ -43,3 +43,45 @@ databaseChangeLog:
       rollback:
         - sql:
             sql: DROP TABLE tasks; DROP TABLE projects; DROP TABLE users;
+
+  - changeSet:
+      id: 2-close-project-procedure
+      author: mbeltran93
+      comment: >
+        PL/SQL: cierra un proyecto marcando como DONE todas las tareas que no
+        lo estaban, y devuelve en un OUT param cuantas filas se actualizaron.
+        Se llama desde OracleProjectCloser (SimpleJdbcCall) en el endpoint
+        POST /api/projects/{id}/close.
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE OR REPLACE PROCEDURE close_project (
+                  p_project_id     IN  NUMBER,
+                  p_updated_count  OUT NUMBER
+              ) IS
+              BEGIN
+                  UPDATE tasks
+                     SET status = 'DONE'
+                   WHERE project_id = p_project_id
+                     AND status <> 'DONE';
+
+                  p_updated_count := SQL%ROWCOUNT;
+              END close_project;
+      rollback:
+        - sql:
+            sql: DROP PROCEDURE close_project;
+
+  - changeSet:
+      id: 3-idx-tasks-project-status
+      author: mbeltran93
+      comment: >
+        Indice compuesto para el filtro GET /api/projects/{id}/tasks?status=,
+        que hace WHERE project_id = ? AND status = ?. Ver seccion "Tuning de
+        performance" del README para el plan de ejecucion antes/despues.
+      changes:
+        - sql:
+            sql: CREATE INDEX idx_tasks_project_status ON tasks(project_id, status);
+      rollback:
+        - sql:
+            sql: DROP INDEX idx_tasks_project_status;

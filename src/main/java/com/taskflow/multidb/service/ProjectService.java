@@ -4,6 +4,7 @@ import com.taskflow.multidb.entity.Project;
 import com.taskflow.multidb.repository.ProjectRepository;
 import com.taskflow.multidb.repository.UserRepository;
 import com.taskflow.multidb.web.dto.ProjectDtos.CreateProjectRequest;
+import com.taskflow.multidb.web.dto.ProjectDtos.ProjectCloseResult;
 import com.taskflow.multidb.web.dto.ProjectDtos.ProjectResponse;
 import com.taskflow.multidb.web.dto.ProjectDtos.UpdateProjectRequest;
 import com.taskflow.multidb.web.error.NotFoundException;
@@ -20,6 +21,7 @@ public class ProjectService {
 
     private final ProjectRepository projectRepository;
     private final UserRepository userRepository;
+    private final ProjectCloser projectCloser;
 
     public ProjectResponse create(CreateProjectRequest request) {
         if (!userRepository.existsById(request.ownerId())) {
@@ -55,6 +57,18 @@ public class ProjectService {
             throw new NotFoundException("Proyecto no encontrado: " + id);
         }
         projectRepository.deleteById(id);
+    }
+
+    /**
+     * Cierra el proyecto: marca todas sus tareas pendientes (no DONE) como
+     * DONE. En Oracle/SQL Server esto corre del lado de la base via el
+     * stored procedure close_project; en Postgres/MySQL via un UPDATE
+     * masivo equivalente. Ver ProjectCloser.
+     */
+    public ProjectCloseResult close(Long id) {
+        getOrThrow(id);
+        int updated = projectCloser.closeProject(id);
+        return new ProjectCloseResult(id, updated);
     }
 
     private Project getOrThrow(Long id) {

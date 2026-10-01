@@ -1,5 +1,7 @@
 # taskflow-multi-db
 
+[![CI](https://github.com/mbeltran93/taskflow-multi-db/actions/workflows/ci.yml/badge.svg)](https://github.com/mbeltran93/taskflow-multi-db/actions/workflows/ci.yml)
+
 Una **misma aplicacion Spring Boot** (mismo JAR, mismas entidades JPA, mismo codigo Java)
 que corre indistintamente contra **PostgreSQL, MySQL, SQL Server u Oracle**, cambiando
 unicamente el perfil de Spring activo. No son 4 apps separadas: es una sola capa de
@@ -87,7 +89,8 @@ PUT    /api/users/{id}       DELETE /api/users/{id}
 
 POST   /api/projects         GET /api/projects    GET /api/projects/{id}
 PUT    /api/projects/{id}    DELETE /api/projects/{id}
-GET    /api/projects/{id}/tasks
+GET    /api/projects/{id}/tasks               GET /api/projects/{id}/tasks?status=TODO
+POST   /api/projects/{id}/close
 
 POST   /api/tasks            GET /api/tasks       GET /api/tasks/{id}
 PUT    /api/tasks/{id}       DELETE /api/tasks/{id}
@@ -96,6 +99,59 @@ PUT    /api/tasks/{id}       DELETE /api/tasks/{id}
 Respuestas de error uniformes (`ApiError`: timestamp, status, error, message, details)
 para 400 (validacion), 404 (no encontrado) y 409 (violacion de integridad, por ejemplo
 un `projectId` o `assigneeId` que no existe).
+
+### `GET /api/projects/{id}/tasks?status=`
+
+El filtro por status es opcional (`?status=TODO|IN_PROGRESS|DONE`); sin el query param
+se comporta como antes (todas las tareas del proyecto). Con el filtro, pasa a ejecutar
+`WHERE project_id = ? AND status = ?`, la query que motiva el indice compuesto de la
+seccion "Tuning de performance" mas abajo.
+
+### `POST /api/projects/{id}/close`
+
+Cierra un proyecto: marca como `DONE` todas sus tareas que no lo estaban y devuelve
+cuantas se actualizaron (`{"projectId": 1, "updatedTasks": 4}`). 404 si el proyecto no
+existe.
+
+```bash
+curl -X POST http://localhost:8080/api/projects/1/close
+```
+
+El mecanismo real detras de este endpoint **no es el mismo en los 4 motores**, a
+proposito, para mostrar stored procedures reales donde el dominio los pide (Oracle y
+SQL Server) sin forzarlos donde no eran parte del alcance:
+
+- **Oracle**: llama al stored procedure PL/SQL `close_project(p_project_id, p_updated_count)`
+  (`db/changelog/oracle/changelog-master.yaml`, changeset `2-close-project-procedure`).
+  El UPDATE corre del lado de la base, y la cantidad de filas afectadas vuelve en un
+  parametro `OUT NUMBER` via `SQL%ROWCOUNT`. `OracleProjectCloser` (en
+  `service/OracleProjectCloser.java`) lo invoca con `SimpleJdbcCall`, declarando los
+  parametros a mano (`withoutProcedureColumnMetaDataAccess()`) para no depender de que
+  el driver pueda introspeccionar la metadata del procedure.
+- **SQL Server**: mismo contrato, stored procedure T-SQL `close_project` con
+  `@ProjectId BIGINT` de entrada y `@UpdatedCount INT OUTPUT`, usando `@@ROWCOUNT`
+  (`db/changelog/sqlserver/changelog-master.yaml`, changeset
+  `2-close-project-procedure`). `SqlServerProjectCloser` lo invoca tambien con
+  `SimpleJdbcCall`.
+- **Postgres y MySQL**: no se agrego una stored procedure propia para estos 2 motores
+  (no era parte del alcance pedido); `JpqlProjectCloser` hace el mismo UPDATE masivo
+  pero via JPQL/Hibernate (`TaskRepository.closeAllTasksOfProject`). El resultado
+  observable desde la API es identico en los 4 motores.
+
+La seleccion de implementacion es por perfil de Spring (`@Profile("oracle")`,
+`@Profile("sqlserver")`, `@Profile({"postgres", "mysql"})` sobre 3 beans que
+implementan la misma interfaz `ProjectCloser`), inyectada en `ProjectService.close()`.
+Ningun controller ni servicio tiene un `if (vendor == ...)`: el vendor activo decide,
+via Spring, que bean se inyecta.
+
+**Probado de punta a punta contra los 2 motores con stored procedure real** (ademas de
+Postgres/MySQL con el fallback JPQL, los 4 verificados por HTTP real con `curl`):
+
+- Oracle (`docker compose up -d oracle`, perfil `oracle`): se creo un proyecto con 4
+  tareas en `TODO`, se llamo `POST /api/projects/{id}/close` y devolvio
+  `{"updatedTasks": 4}`; un `GET` posterior confirmo las 4 tareas en `DONE`.
+- SQL Server (`docker compose up -d sqlserver`, perfil `sqlserver`): mismo flujo con 3
+  tareas, devolvio `{"updatedTasks": 3}`, confirmado con un `GET` posterior.
 
 ## Como correrlo contra cada motor
 
@@ -280,6 +336,122 @@ configuracion: sacar el `@Disabled` de `SqlServerCrudIT`/`OracleCrudIT` y correr
 `mvn verify` (o `mvn verify -Dit.test=NombreDeLaClase` para una sola) deberia correr
 las 4 suites sin cambios de codigo.
 
+## Tuning de performance
+
+El endpoint `GET /api/projects/{id}/tasks?status=` (y `TaskRepository.findByProjectIdAndStatus`)
+hace `WHERE project_id = ? AND status = ?`. Hasta esta seccion, el unico indice relevante
+era `idx_tasks_project_id` (una sola columna, creado en el changeset `1-create-schema`
+original de cada vendor), asi que el motor podia usar ese indice para acotar por
+`project_id` pero tenia que revisar cada fila candidata para aplicar el filtro de
+`status` aparte. Se agrego un indice compuesto `idx_tasks_project_status ON
+tasks(project_id, status)` via un changeset nuevo de Liquibase en los 4 vendors
+(`2-idx-tasks-project-status` en Postgres/MySQL, `3-idx-tasks-project-status` en
+Oracle/SQL Server, despues del changeset del stored procedure).
+
+Esto se midio de verdad, no es un ejemplo inventado: se levantaron los contenedores
+reales de Postgres y MySQL (`docker compose up -d postgres mysql`), se sembraron **49
+proyectos y 300.000 tareas** distribuidas al azar entre ellos (asi `project_id` es
+selectivo: ~6000 filas de 300.000 por proyecto, y el filtro de `status` parte eso en
+~3), se corrio el plan de ejecucion contra el proyecto `id=1` **antes** de crear el
+indice compuesto, se agrego el indice (el mismo changeset de Liquibase, aplicado con la
+app corriendo), y se volvio a correr el mismo plan **despues**. Se eligieron estos 2
+motores por ser los mas rapidos de levantar con datos reales de prueba; SQL Server y
+Oracle ya tenian su propia verificacion (la de los stored procedures, arriba) y
+agregarles tambien el seed de 300k filas no sumaba nada nuevo a lo que ya mostraban
+Postgres/MySQL sobre el mismo indice.
+
+### PostgreSQL
+
+Query: `SELECT * FROM tasks WHERE project_id = 1 AND status = 'TODO';`
+
+**Antes** (solo `idx_tasks_project_id`) — `EXPLAIN (ANALYZE, BUFFERS)`:
+
+```
+Bitmap Heap Scan on tasks  (cost=82.86..5274.79 rows=2032 width=102) (actual time=1.038..9.066 rows=1999 loops=1)
+  Recheck Cond: (project_id = 1)
+  Filter: ((status)::text = 'TODO'::text)
+  Rows Removed by Filter: 3966
+  Heap Blocks: exact=3439
+  Buffers: shared hit=3448
+  ->  Bitmap Index Scan on idx_tasks_project_id  (cost=0.00..82.35 rows=6140 width=0) (actual time=0.728..0.729 rows=5965 loops=1)
+        Index Cond: (project_id = 1)
+        Buffers: shared hit=9
+Planning Time: 1.103 ms
+Execution Time: 9.240 ms
+```
+
+El indice de una sola columna trae las ~5965 filas del proyecto y recien ahi un
+`Filter` descarta 3966 (las que no son `TODO`) leyendo la fila entera para cada una.
+
+**Despues** (con `idx_tasks_project_status`) — mismo query, cache ya tibia en ambas
+corridas para que la comparacion sea justa:
+
+```
+Bitmap Heap Scan on tasks  (cost=29.24..3809.61 rows=2031 width=102) (actual time=0.646..3.797 rows=1999 loops=1)
+  Recheck Cond: ((project_id = 1) AND ((status)::text = 'TODO'::text))
+  Heap Blocks: exact=1639
+  Buffers: shared hit=1647
+  ->  Bitmap Index Scan on idx_tasks_project_status  (cost=0.00..28.73 rows=2031 width=0) (actual time=0.492..0.492 rows=1999 loops=1)
+        Index Cond: ((project_id = 1) AND ((status)::text = 'TODO'::text))
+        Buffers: shared hit=8
+Planning Time: 2.045 ms
+Execution Time: 3.993 ms
+```
+
+Ya no hay `Filter`/`Rows Removed by Filter`: el `status` entra directo en el
+`Index Cond`, el index scan devuelve exactamente las 1999 filas que hacen falta (no
+5965 para despues descartar 3966), el costo estimado baja de `82.86..5274.79` a
+`29.24..3809.61`, y los buffers leidos bajan a menos de la mitad (1647 contra 3448).
+
+### MySQL
+
+Mismo query, `EXPLAIN ANALYZE` (formato arbol de MySQL 8).
+
+**Antes** (solo `idx_tasks_project_id`, indice compuesto dropeado a mano para medir
+este estado):
+
+```
+-> Filter: (tasks.`status` = 'TODO')  (cost=1616 rows=622) (actual time=0.0597..19.5 rows=2070 loops=1)
+    -> Index lookup on tasks using idx_tasks_project_id (project_id=1)  (cost=1616 rows=6217) (actual time=0.0507..18.5 rows=6217 loops=1)
+```
+
+El index lookup trae las 6217 filas del proyecto; el `Filter` exterior las recorre una
+por una para quedarse con las 2070 que son `TODO`.
+
+**Despues** (con `idx_tasks_project_status` recreado):
+
+```
+-> Index lookup on tasks using idx_tasks_project_status (project_id=1, status='TODO')  (cost=724 rows=2070) (actual time=0.0737..4.12 rows=2070 loops=1)
+```
+
+Un solo paso: el index lookup ya filtra por las dos columnas (`project_id=1,
+status='TODO'`) y devuelve directamente las 2070 filas que hacen falta, sin `Filter`
+posterior. El costo estimado baja de 1616 a 724 y el tiempo real de ejecucion de
+~19.5ms a ~4.12ms (unas 4-5x), con una fraccion de las filas tocadas (6217 -> 2070).
+
+## CI/CD
+
+GitHub Actions corre en cada push/PR a `main` (`.github/workflows/ci.yml`):
+
+- **`test-postgres-mysql`**: corre `PostgresCrudIT` y `MySqlCrudIT` (el mismo flujo de
+  `AbstractCrudIT` descrito en la seccion de Tests) con `mvn verify
+  -Dit.test=PostgresCrudIT,MySqlCrudIT`. Estas 2 clases ya administran su propio
+  contenedor real via Testcontainers, y los runners de GitHub Actions para Ubuntu
+  traen Docker funcionando de fabrica, asi que Testcontainers corre ahi sin el
+  problema de Docker Desktop para Windows documentado mas arriba (que es especifico
+  de esta maquina de desarrollo, no del codigo). Por eso el workflow **no** usa el
+  bloque `services:` de Actions para Postgres/MySQL: hubiera sido un contenedor de
+  mas, sin usar, en paralelo al que el propio test ya levanta y destruye solo.
+- **SQL Server y Oracle quedan fuera del CI automatico**, a proposito: las imagenes
+  son mucho mas pesadas (SQL Server ronda el GB, `oracle-free` varios GB mas un
+  arranque de varios minutos inicializando datafiles) y harian el pipeline lento y
+  caro para un repo de portafolio. El codigo de esos 2 motores (incluidos los stored
+  procedures nuevos) esta igual de verificado, pero a mano con `docker compose` +
+  `curl`/`sqlcmd` contra contenedores reales (ver "Que se probo realmente" y la
+  seccion de los stored procedures mas arriba), no en este pipeline.
+- **`codeql`**: analisis estatico de Java con CodeQL (`github/codeql-action`),
+  tambien en cada push/PR a `main`.
+
 ## Estructura del repo
 
 ```
@@ -287,6 +459,9 @@ src/main/java/com/taskflow/multidb/
 ├── entity/              User, Project, Task, TaskStatus (identicas para los 4 motores)
 ├── repository/          Spring Data JPA (UserRepository, ProjectRepository, TaskRepository)
 ├── service/             logica de negocio + validaciones cruzadas (FKs existen, email unico)
+│                        + ProjectCloser (interfaz) y sus 3 implementaciones por perfil:
+│                        OracleProjectCloser / SqlServerProjectCloser (SimpleJdbcCall a un
+│                        stored procedure nativo) y JpqlProjectCloser (Postgres/MySQL)
 ├── web/                 controllers REST + DTOs (request/response) + manejo de errores
 └── config/               bean de BCryptPasswordEncoder
 
@@ -296,14 +471,19 @@ src/main/resources/
 ├── application-mysql.yml        idem para MySQL
 ├── application-sqlserver.yml    idem para SQL Server
 ├── application-oracle.yml       idem para Oracle
-└── db/changelog/<vendor>/       un changelog de Liquibase con el DDL real de ese vendor
+└── db/changelog/<vendor>/       un changelog de Liquibase con el DDL real de ese vendor;
+                                 Oracle y SQL Server tienen ademas el changeset del stored
+                                 procedure close_project, y los 4 vendors tienen el changeset
+                                 del indice compuesto idx_tasks_project_status (ver
+                                 "Tuning de performance")
 
 src/test/java/com/taskflow/multidb/
 ├── AbstractCrudIT.java     la suite de tests, una sola vez
-├── PostgresCrudIT.java     misma suite contra Postgres real (Testcontainers)
-├── MySqlCrudIT.java        misma suite contra MySQL real (Testcontainers)
+├── PostgresCrudIT.java     misma suite contra Postgres real (Testcontainers; corre en CI)
+├── MySqlCrudIT.java        misma suite contra MySQL real (Testcontainers; corre en CI)
 ├── SqlServerCrudIT.java    misma suite contra SQL Server real (Testcontainers, @Disabled)
 └── OracleCrudIT.java       misma suite contra Oracle real (Testcontainers, @Disabled)
 
-docker-compose.yml   los 4 motores, cada uno como servicio independiente
+.github/workflows/ci.yml   CI: PostgresCrudIT + MySqlCrudIT, y CodeQL para Java
+docker-compose.yml         los 4 motores, cada uno como servicio independiente
 ```

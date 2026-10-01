@@ -26,4 +26,15 @@ public class ProjectDtos {
             Long ownerId,
             Instant createdAt
     ) {}
+
+    /**
+     * Resultado de cerrar un proyecto: cuantas tareas se marcaron DONE.
+     * En Oracle y SQL Server ese numero sale del OUT param de un stored
+     * procedure nativo (close_project); en Postgres/MySQL, de un UPDATE
+     * masivo equivalente via JPQL. Ver ProjectCloser y sus implementaciones.
+     */
+    public record ProjectCloseResult(
+            Long projectId,
+            int updatedTasks
+    ) {}
 }

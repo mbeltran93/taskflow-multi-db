@@ -40,3 +40,21 @@ databaseChangeLog:
       rollback:
         - sql:
             sql: DROP TABLE tasks; DROP TABLE projects; DROP TABLE users;
+
+  - changeSet:
+      id: 2-idx-tasks-project-status
+      author: mbeltran93
+      comment: >
+        Indice compuesto para el filtro GET /api/projects/{id}/tasks?status=,
+        que hace WHERE project_id = ? AND status = ?. Antes de este indice,
+        Postgres usaba el indice de una sola columna idx_tasks_project_id y
+        despues filtraba status en memoria (Bitmap Heap Scan + Filter); con
+        este indice compuesto el filtro de status entra en el Index Cond, no
+        en un Filter posterior. Planes reales antes/despues en la seccion
+        "Tuning de performance" del README.
+      changes:
+        - sql:
+            sql: CREATE INDEX idx_tasks_project_status ON tasks(project_id, status);
+      rollback:
+        - sql:
+            sql: DROP INDEX idx_tasks_project_status;
